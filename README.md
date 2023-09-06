@@ -2,6 +2,8 @@
 
 The project was completed in the Biological Data Sciences Captsone course. 
 
+The portion posted is my work, however, there are additional parts to the project completed by Skylar Har and Hung Phan.
+
 Source data derived from this study https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9935790/.
 
 I hypothesize that the sampling months will have a significant difference in the abundances of Bacillus, Candidatus, Udaeobacter, Conexibacter, and Acidothermus because of the transitions of the seasons and the variation in temperature.  
