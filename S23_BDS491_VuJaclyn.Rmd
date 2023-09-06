@@ -1,0 +1,401 @@
+---
+title: "Evaluation of Sampling Months on Soil Microbiome"
+author: "Jaclyn Vu"
+date: "Spring 2023"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+  word_document: default
+  pdf_document: default
+---
+
+Load packages and libraries
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(ggplot2)
+library(phyloseq)
+library(ggpubr)
+library(vegan)
+```
+
+Load Data & Sample summary prior to normalization
+
+```{r}
+# Load data and create phyloseq object
+set.seed(420)
+soil.ps <- readRDS('~/hub_data_share/week4_datasets/hum_diet_filtered_2023.rds')
+soil_otu <- otu_table(soil.ps)
+
+# Make a data frame with a column for the read counts of each sample
+sample_sum_df <- data.frame(sum = sample_sums(soil.ps))
+
+# Histogram of sample read counts
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "indianred", binwidth = 2500) +
+  ggtitle("Distribution of Sample Sequencing Depth") + 
+  xlab("Read Counts") + ylab("Depth")
+  theme(axis.title.y = element_blank())
+```
+Identify statistics of the sample read sums
+```{r}
+# Prints the mean, the minimum read value, the maximum read value. and sample of the extreme values above 100,000 read counts. 
+mean(sample_sum_df$sum)
+min(sample_sum_df$sum)
+max(sample_sum_df$sum)
+which(sample_sums(soil.ps)>100000)
+```
+Normalize the Data with Resampling/Rarefraction
+```{r}
+soil_resample <- rarefy_even_depth(soil.ps, sample.size=min(sample_sums(soil.ps)))
+soil_resample
+```
+Ensure that resampling worked correctly by producing a histogram
+```{r}
+# Make a data frame with a column for the read counts of each sample
+sample_sum_df_resample <- data.frame(sum = sample_sums(soil_resample))
+
+# Histogram of sample read counts
+ggplot(sample_sum_df_resample, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "indianred", binwidth = 2500) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+```
+
+Remove the top two reads and resample to the median depth of the remaining sample
+
+```{r}
+# seperate the two samples with highest depth 
+saved_samples_to_resample <- soil_otu[which(sample_sums(soil.ps)>100000),]
+saved_samples_less_than <- soil_otu[which(sample_sums(soil.ps)<100000),]
+
+# resample the top two extreme values to the median read depth
+top_two_phyllo_rarefied<-rarefy_even_depth(saved_samples_to_resample, sample.size = median(rowSums(saved_samples_less_than)))
+
+# Merge the resampled extreme values back to the rest of the samples
+merges_otu<-merge_phyloseq(top_two_phyllo_rarefied,saved_samples_less_than)
+soil.ps@otu_table<-merges_otu
+
+#Check the histogram of sample depths
+sample_sum_df <- data.frame(sum = sample_sums(otu_table(soil.ps)))
+
+# Histogram of sample read counts without normalization
+p_qc<-ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "indianred", binwidth = 2500) +
+  ggtitle("Distribution of Sample Sequencing Depth") + 
+  xlab("Read Counts") + ylab("Depth")
+  theme(axis.title.y = element_blank())
+p_qc
+```
+
+Normalization of the quality controlled data via Resampling and Relative Abundance
+
+```{r}
+qc_resample <- rarefy_even_depth(soil.ps, sample.size=min(sample_sums(soil.ps)))
+qc_relative_abundance <- transform_sample_counts(soil.ps, function(x)x/sum(x))
+```
+
+Looking at alpha diversity of the quality controlled resampled data
+
+```{r}
+theme_set(theme_bw())
+pal = "Set1"
+scale_colour_discrete <-  function(palname=pal, ...){
+  scale_colour_brewer(palette=palname, ...)
+}
+scale_fill_discrete <-  function(palname=pal, ...){
+  scale_fill_brewer(palette=palname, ...)
+}
+plot_richness(qc_resample)
+
+# relative abundance does not work with:
+#plot_richness(qc_relative_abundance)
+```
+
+Looking at alpha diversity with chao, shannon, and observed indices with sampling month on the x axis. 
+
+```{r}
+chao <- plot_richness(qc_resample, x="SamplingMonth", measures=c("Chao1"))
+observed <-plot_richness(qc_resample, x="SamplingMonth", measures=c("Observed"))
+shannon <-plot_richness(qc_resample, x="SamplingMonth", measures=c("Shannon"))
+
+# Add statistics to the alpha diveristy: Kruskal-Wallis test and Pairwise Comparisons
+
+ # Add p-values comparing groups
+ # Specify the comparisons you want
+my_comparisons <- list( c("Agust", "November"), c("Agust", "September"), c("Agust", "October"), c("November", "October"), c("November", "September"), c("September", "October"))
+
+chao + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50)                   # Add global p-value
+shannon + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50) +                   # Add global p-value
+  expand_limits(y=c(0, 10))
+observed + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50) +  expand_limits(y=c(0, 25))              # Add global p-value
+``` 
+
+From here on out we only look at the observed values.
+
+Between class analysis and PERMANOVA test on the quality controlled resampled data
+
+```{r}
+#between class analysis
+GP.ord <- ordinate(qc_resample, "PCoA")
+
+asv_qc_resample <- plot_ordination(qc_resample, GP.ord, type = "taxa", color = "Class", title = "taxa")
+asv_qc_resample 
+asv_qc_resample+theme(legend.position = 'none') 
+a <- plot_ordination(qc_resample, GP.ord, color = "SamplingMonth", title = "Sample")
+a + stat_ellipse(type = "norm", linetype = 2)
+
+#Maximize the variance between group we define 
+bet_ord <- ordinate(
+  physeq = qc_resample,
+  method = "CAP",
+  distance = "bray",
+  formula = ~SamplingMonth
+  )
+b <- plot_ordination(qc_resample, bet_ord, color = "SamplingMonth", title = "Sample")
+b + stat_ellipse(type = "norm", linetype = 2)
+
+# Permanova 
+qc_resample_bray <- phyloseq::distance(qc_resample, method = "bray")
+sampledf <- data.frame(sample_data(qc_resample))
+adonis2(qc_resample_bray ~ SamplingMonth, data = sampledf)
+``` 
+
+Between class analysis and PERMANOVA test on the _Bacillus_ subset.
+
+```{r}
+# Subset Bacillus from the quality controlled resampled data and then resample again
+genus_name <- "Bacillus"
+bacillus_subset <- subset_taxa(qc_resample, Genus == genus_name)
+bac_resample <- rarefy_even_depth(bacillus_subset, sample.size=min(sample_sums(bacillus_subset)))
+
+# Between class analysis
+Bac_GP.ord <- ordinate(bac_resample, "PCoA")
+asv_bac <- plot_ordination(bac_resample, Bac_GP.ord, type = "taxa", color = "Class", title = "Bacillus - taxa")
+asv_bac + theme(legend.position = 'none')
+
+a <- plot_ordination(bac_resample, Bac_GP.ord, color = "SamplingMonth", title = "Sample") 
+a + stat_ellipse(type = "norm", linetype = 2)
+
+#Maximize the variance between group we define 
+bac_bet_ord <- ordinate(
+  physeq = bac_resample,
+  method = "CAP",
+  distance = "bray",
+  formula = ~SamplingMonth
+  )
+b <- plot_ordination(bac_resample, bac_bet_ord, color = "SamplingMonth", title = "Sample")
+b + stat_ellipse(type = "norm", linetype = 2)
+
+# Permanova 
+bac_resample_bray <- phyloseq::distance(bac_resample, method = "bray")
+sampledf <- data.frame(sample_data(bac_resample))
+adonis2(bac_resample_bray ~ SamplingMonth, data = sampledf)
+
+#alpha diversity of subset
+observed <-plot_richness(bac_resample, x="SamplingMonth", measures=c("Observed"))
+
+# Add statistics to the alpha diveristy: Kruskal-Wallis test and Pairwise Comparisons
+ # Add p-values comparing groups
+ # Specify the comparisons you want
+my_comparisons <- list( c("Agust", "November"), c("Agust", "September"), c("Agust", "October"), c("November", "October"), c("November", "September"), c("September", "October"))
+observed + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 20) + expand_limits(y=c(0, 10))                   # Add global p-value
+``` 
+
+Explore genera to find specific genera to evaluate
+
+```{r}
+# Extracting the genera from the quality controlled resampled data
+qc_resample_tax <- tax_table(qc_resample)
+genera <-qc_resample_tax[, "Genus"]
+
+# Print the first 21 genera to find unique genera
+genera[1:21]
+``` 
+
+ASV plots of the first 7 unique genera
+
+```{r}
+genus_name <- "Candidatus Udaeobacter"
+CU_subset <- subset_taxa(qc_resample, Genus == genus_name)
+CU_subset_resample <- rarefy_even_depth(CU_subset, sample.size=min(sample_sums(CU_subset)))
+
+CU_GP.ord <- ordinate(CU_subset_resample, "PCoA")
+asv_CU <- plot_ordination(CU_subset_resample, CU_GP.ord, type = "taxa", color = "Class", title = "Candidatus Udaeobacter - taxa")
+asv_CU + theme(legend.position = 'none')
+
+genus_name <- "Sphingomonas"
+Sphingomonas_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Sphingomonas_subset_resample <- rarefy_even_depth(Sphingomonas_subset, sample.size=min(sample_sums(Sphingomonas_subset)))
+
+Sphingomonas_GP.ord <- ordinate(Sphingomonas_subset_resample, "PCoA")
+Sphingomonas_bac <- plot_ordination(Sphingomonas_subset_resample, Sphingomonas_GP.ord, type = "taxa", color = "Class", title = "Sphingomonas - taxa")
+Sphingomonas_bac + theme(legend.position = 'none')
+
+genus_name <- "Conexibacter"
+Conexibacter_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Conexibacter_subset_resample <- rarefy_even_depth(Conexibacter_subset, sample.size=min(sample_sums(Conexibacter_subset)))
+
+Conexibacter_GP.ord <- ordinate(Conexibacter_subset_resample, "PCoA")
+asv_Conexibacter <- plot_ordination(Conexibacter_subset_resample, Conexibacter_GP.ord, type = "taxa", color = "Class", title = "Conexibacter - taxa")
+asv_Conexibacter + theme(legend.position = 'none')
+
+genus_name <- "Aquisphaera"
+Aquisphaera_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Aquisphaera_subset_resample <- rarefy_even_depth(Aquisphaera_subset, sample.size=min(sample_sums(Aquisphaera_subset)))
+
+Aquisphaera_GP.ord <- ordinate(Aquisphaera_subset_resample, "PCoA")
+asv_Aquisphaera <- plot_ordination(Aquisphaera_subset_resample, Aquisphaera_GP.ord, type = "taxa", color = "Class", title = "Aquisphaera - taxa")
+asv_Aquisphaera + theme(legend.position = 'none')
+
+genus_name <- "Acidothermus"
+Acidothermus_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Acidothermus_subset_resample <- rarefy_even_depth(Acidothermus_subset, sample.size=min(sample_sums(Acidothermus_subset)))
+
+Acidothermus_GP.ord <- ordinate(Acidothermus_subset_resample, "PCoA")
+asv_Acidothermus <- plot_ordination(Acidothermus_subset_resample, Acidothermus_GP.ord, type = "taxa", color = "Class", title = "Acidothermus - taxa")
+asv_Acidothermus + theme(legend.position = 'none')
+
+genus_name <- "Nocardioides"
+Nocardioides_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Nocardioides_subset_resample <- rarefy_even_depth(Nocardioides_subset, sample.size=min(sample_sums(Nocardioides_subset)))
+
+Nocardioides_GP.ord <- ordinate(Nocardioides_subset_resample, "PCoA")
+asv_Nocardioides <- plot_ordination(Nocardioides_subset_resample, Nocardioides_GP.ord, type = "taxa", color = "Class", title = "Nocardioides - taxa")
+asv_Nocardioides + theme(legend.position = 'none')
+
+genus_name <- "Candidatus Nitrocosmicus"
+CN_subset <- subset_taxa(qc_resample, Genus == genus_name)
+CN_subset_resample <- rarefy_even_depth(CN_subset, sample.size=min(sample_sums(CN_subset)))
+
+CN_GP.ord <- ordinate(CN_subset_resample, "PCoA")
+asv_CN <- plot_ordination(CN_subset_resample, CN_GP.ord, type = "taxa", color = "Class", title = "Candidatus Nitrocosmicus - taxa")
+asv_CN + theme(legend.position = 'none')
+``` 
+
+I decided to proceed with _Candidatus Udaeobacter_, _Conexibacter_, and _Acidothermus_
+
+```{r}
+# Subset Candidatus Udaeobacter from the quality controlled resampled data and then resample again
+genus_name <- "Candidatus Udaeobacter"
+CU_subset <- subset_taxa(qc_resample, Genus == genus_name)
+CU_subset_resample <- rarefy_even_depth(CU_subset, sample.size=min(sample_sums(CU_subset)))
+
+CU_GP.ord <- ordinate(CU_subset_resample, "PCoA")
+asv_cu <- plot_ordination(CU_subset_resample, CU_GP.ord, type = "taxa", color = "Class", title = "Candidatus Udaeobacter")
+asv_cu + theme(legend.position = 'none')
+
+# Between class analysis
+a <- plot_ordination(CU_subset_resample, CU_GP.ord, color = "SamplingMonth", title = "Sample")
+a + stat_ellipse(type = "norm", linetype = 2)
+#Maximize the variance between group we define 
+CU_bet_ord <- ordinate(
+  physeq = CU_subset_resample,
+  method = "CAP",
+  distance = "bray",
+  formula = ~SamplingMonth
+  )
+b <- plot_ordination(CU_subset_resample, CU_bet_ord, color = "SamplingMonth", title = "Sample")
+b + stat_ellipse(type = "norm", linetype = 2)
+
+# Permanova 
+CU_subset_resample_bray <- phyloseq::distance(CU_subset_resample, method = "bray")
+sampledf <- data.frame(sample_data(CU_subset_resample))
+adonis2(CU_subset_resample_bray ~ SamplingMonth, data = sampledf)
+
+#alpha diversity of subset
+observed <-plot_richness(CU_subset_resample, x="SamplingMonth", measures=c("Observed"))
+
+# Add statistics to the alpha diveristy: Kruskal-Wallis test and Pairwise Comparisons
+ # Add p-values comparing groups
+ # Specify the comparisons you want
+my_comparisons <- list( c("Agust", "November"), c("Agust", "September"), c("Agust", "October"), c("November", "October"), c("November", "September"), c("September", "October"))
+observed + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50) + expand_limits(y=c(0, 25))                   # Add global p-value
+```
+
+```{r}
+# Subset Conexibacter from the quality controlled resampled data and then resample again
+genus_name <- "Conexibacter"
+Conexibacter_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Conexibacter_subset_resample <- rarefy_even_depth(Conexibacter_subset, sample.size=min(sample_sums(Conexibacter_subset)))
+
+# Between class analysis 
+Conexibacter_GP.ord <- ordinate(Conexibacter_subset_resample, "PCoA")
+asv_Conexibacter <- plot_ordination(Conexibacter_subset_resample, Conexibacter_GP.ord, type = "taxa", color = "Class", title = "Conexibacter")
+asv_Conexibacter + theme(legend.position = 'none')
+
+a <- plot_ordination(Conexibacter_subset_resample, Conexibacter_GP.ord, color = "SamplingMonth", title = "Sample")
+a + stat_ellipse(type = "norm", linetype = 2)
+
+#Maximize the variance between group we define 
+Conexibacter_bet_ord <- ordinate(
+  physeq = Conexibacter_subset_resample,
+  method = "CAP",
+  distance = "bray",
+  formula = ~SamplingMonth
+  )
+b <- plot_ordination(Conexibacter_subset_resample, Conexibacter_bet_ord, color = "SamplingMonth", title = "Sample")
+b + stat_ellipse(type = "norm", linetype = 2)
+
+# Permanova 
+Conexibacter_subset_resample_bray <- phyloseq::distance(Conexibacter_subset_resample, method = "bray")
+sampledf <- data.frame(sample_data(Conexibacter_subset_resample))
+adonis2(Conexibacter_subset_resample_bray ~ SamplingMonth, data = sampledf)
+
+#alpha diversity of subset
+observed <-plot_richness(Conexibacter_subset_resample, x="SamplingMonth", measures=c("Observed"))
+
+# Add statistics to the alpha diveristy: Kruskal-Wallis test and Pairwise Comparisons
+ # Add p-values comparing groups
+ # Specify the comparisons you want
+my_comparisons <- list( c("Agust", "November"), c("Agust", "September"), c("Agust", "October"), c("November", "October"), c("November", "September"), c("September", "October"))
+observed + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50) + expand_limits(y=c(0, 25))                   # Add global p-value
+```
+
+```{r}
+# Subset Acidothermus from the quality controlled resampled data and then resample again
+genus_name <- "Acidothermus"
+Acidothermus_subset <- subset_taxa(qc_resample, Genus == genus_name)
+Acidothermus_subset_resample <- rarefy_even_depth(Acidothermus_subset, sample.size=min(sample_sums(Acidothermus_subset)))
+
+# Between class analysis 
+Acidothermus_GP.ord <- ordinate(Acidothermus_subset_resample, "PCoA")
+asv_acid <- plot_ordination(Acidothermus_subset_resample, other_genus_GP.ord, type = "taxa", color = "Class", title = "Acidothermus")
+asv_acid + theme(legend.position = 'none')
+
+a <- plot_ordination(Acidothermus_subset_resample, Acidothermus_GP.ord, color = "SamplingMonth", title = "Sample")
+a + stat_ellipse(type = "norm", linetype = 2)
+
+#Maximize the variance between group we define 
+Acidothermus_bet_ord <- ordinate(
+  physeq = Acidothermus_subset_resample,
+  method = "CAP",
+  distance = "bray",
+  formula = ~SamplingMonth
+  )
+b <- plot_ordination(Acidothermus_subset_resample, Acidothermus_bet_ord, color = "SamplingMonth", title = "Sample")
+b + stat_ellipse(type = "norm", linetype = 2)
+
+# Permanova 
+Acidothermus_subset_resample_bray <- phyloseq::distance(Acidothermus_subset_resample, method = "bray")
+sampledf <- data.frame(sample_data(Acidothermus_subset_resample))
+adonis2(Acidothermus_subset_resample_bray ~ SamplingMonth, data = sampledf)
+
+#alpha diversity of subset
+observed <-plot_richness(Acidothermus_subset_resample, x="SamplingMonth", measures=c("Observed"))
+
+# Add statistics to the alpha diveristy: Kruskal-Wallis test and Pairwise Comparisons
+ # Add p-values comparing groups
+ # Specify the comparisons you want
+my_comparisons <- list( c("Agust", "November"), c("Agust", "September"), c("Agust", "October"), c("November", "October"), c("November", "September"), c("September", "October"))
+observed + stat_compare_means(comparisons = my_comparisons)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 50) + expand_limits(y=c(0, 25))                   # Add global p-value
+```
